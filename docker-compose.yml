@@ -1,0 +1,33 @@
+version: '3.8'
+
+services:
+  quantum-redis:
+    image: redis:latest
+    network_mode: "host"  # <--- MAGIA
+    restart: always
+
+  quantum-chroma:
+    image: chromadb/chroma:latest
+    network_mode: "host"  # <--- MAGIA
+    environment:
+      - CHROMA_SERVER_HOST=localhost
+      - CHROMA_SERVER_HTTP_PORT=8000
+    volumes:
+      - ./chroma_data:/chroma/chroma
+    restart: always
+
+  quantum-app:
+    build: .
+    network_mode: "host"  # <--- MAGIA (Condivide l'IP della VPS)
+    volumes:
+      - .:/app
+    depends_on:
+      - quantum-redis
+      - quantum-chroma
+    environment:
+      - REDIS_HOST=localhost
+      - CHROMA_HOST=localhost
+      - CHROMA_PORT=8000
+    stdin_open: true
+    tty: true
+    restart: always
