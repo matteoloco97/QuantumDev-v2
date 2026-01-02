@@ -22,11 +22,14 @@ services:
       - quantum-chroma
     volumes:
       - .:/app
+    # Carica le variabili dal file .env automaticamente
+    env_file:
+      - .env
     environment:
       - PYTHONUNBUFFERED=1
       - REDIS_HOST=localhost
       - CHROMA_HOST=localhost
-      - BRAVE_API_KEY=BSAfTFdUWR96Oc16Ua0uRBnYUZGpBZD
-    stdin_open: true
-    tty: true
+      # BRAVE_API_KEY è ora nel file .env, non qui!
+    # Il comando ora avvia il server API sulla porta 8001
+    command: uvicorn core.engine:app --host 0.0.0.0 --port 8001 --reload
     network_mode: host

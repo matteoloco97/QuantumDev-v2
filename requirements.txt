@@ -1,4 +1,7 @@
-duckduckgo-search
+fastapi
+uvicorn
+python-dotenv
+pydantic
 chromadb
 requests
 langchain-community

@@ -1,138 +1,158 @@
-import sys
 import os
+import sys
 import datetime
 import re
 import requests
-import asyncio
+import uvicorn
+from fastapi import FastAPI
+from pydantic import BaseModel
+from typing import Optional, List, Dict
+from dotenv import load_dotenv
 
-# --- CONFIGURAZIONE ---
+# Patch percorsi per importare i moduli locali
 current_dir = os.path.dirname(os.path.abspath(__file__))
 sys.path.append(current_dir)
 
 from vector_memory import VectorMemory
 from tools import AVAILABLE_TOOLS
 
+load_dotenv()
+
+# --- CONFIGURAZIONE ---
 LLM_API_URL = "http://localhost:5000/v1/chat/completions"
 MODEL_NAME = "DeepSeek-R1-Distill-Qwen-32B-abliterated-Q6_K.gguf"
 
-# Inizializza memoria o fallback
+app = FastAPI(title="Quantum AI API", version="3.6 (Strict Memory)")
+
+# Inizializzazione Memoria
 try:
     memory = VectorMemory()
-except:
-    class DummyMemory:
-        def search(self, q): return "Nessun dato."
-        def save(self, u, a): pass
-    memory = DummyMemory()
+except Exception as e:
+    print(f"⚠️ Errore critico inizializzazione Memoria: {e}")
+    memory = None
 
+# --- MODELLI DATI ---
+class ChatRequest(BaseModel):
+    message: str
+    history: Optional[List[Dict[str, str]]] = []
+
+class ChatResponse(BaseModel):
+    response: str
+    tool_used: Optional[str] = None
+    context_used: str
+
+# --- PROMPT SYSTEM (FIX ALLUCINAZIONI) ---
 def get_system_prompt():
     now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M")
     return f"""
-Sei Quantum, un'Assistente AI esperto.
-OGGI È: {now}
+Sei Quantum, un'Intelligenza Strategica Personale.
+DATA CORRENTE: {now}
 
-TUE REGOLE SUPREME:
-1. NON INVENTARE. Se non sai un dato aggiornato (prezzi, news, meteo), DEVI usare il tool.
-2. NON dialogare con te stesso. Rispondi solo all'ultima domanda dell'utente.
-3. Se usi un tool, scrivi ESATTAMENTE e SOLO il comando, nient'altro.
+=== PROTOCOLLO MEMORIA (RIGIDO) ===
+1. Hai accesso a un blocco <CONTESTO_STORICO> che contiene i ricordi reali.
+2. Se l'utente chiede informazioni su SE STESSO, i suoi PROGETTI o le sue PREFERENZE:
+   - DEVI basarti ESCLUSIVAMENTE su quanto scritto nel <CONTESTO_STORICO>.
+   - Se l'informazione non è presente nel contesto, DEVI RISPONDERE: "Non ho dati in memoria su questo."
+   - È ASSOLUTAMENTE VIETATO INVENTARE preferenze, abitudini o dati dell'utente.
 
-SINTASSI TOOL:
-[TOOL: web_search, query: "tua ricerca qui"]
+=== PROTOCOLLO STRUMENTI ===
+1. Se l'utente chiede dati FATTUALI GENERALI (es. "Prezzo Bitcoin", "Meteo", "News"), e non li sai:
+   - USA IL TOOL: [TOOL: web_search, query: "..."]
+
+=== STILE RISPOSTA ===
+- Sii diretto, tecnico e analitico.
+- Niente convenevoli inutili.
+- Se il ragionamento è incerto, dichiaralo.
 """
 
+def clean_think_tags(text):
+    """Rimuove i tag di ragionamento interno del modello"""
+    return re.sub(r'<think>.*?</think>', '', text, flags=re.DOTALL).strip()
+
 def extract_tool_command(text):
-    # Cerca il comando tool ignorando il pensiero <think>...</think>
+    """Cerca comandi tool nella risposta dell'LLM"""
     pattern = r'\[TOOL:\s*(\w+),\s*query:\s*"([^"]+)"\]'
     match = re.search(pattern, text)
     if match:
         return match.group(1), match.group(2)
     return None, None
 
-def clean_think_tags(text):
-    """Rimuove i pensieri dell'AI per mostrare solo la risposta pulita"""
-    return re.sub(r'<think>.*?</think>', '', text, flags=re.DOTALL).strip()
-
-async def chat_with_llm(messages):
+async def call_llm(messages, temp=0.3):
+    """Chiamata API al server LLM locale"""
     payload = {
         "model": MODEL_NAME,
         "messages": messages,
-        "temperature": 0.3,  # Molto basso per evitare che "sogni"
-        "max_tokens": 1000
+        "temperature": temp, # Abbassato a 0.3 per ridurre allucinazioni
+        "max_tokens": 1500
     }
     try:
         response = requests.post(LLM_API_URL, json=payload, timeout=120)
-        if response.status_code == 200:
-            return response.json()['choices'][0]['message']['content']
-        return f"ERRORE API: {response.status_code}"
+        response.raise_for_status() # Solleva errore se status != 200
+        return response.json()['choices'][0]['message']['content']
+    except requests.exceptions.RequestException as e:
+        print(f"❌ ERRORE CHIAMATA LLM: {e}")
+        return "Errore critico di connessione al Cervello (LLM)."
     except Exception as e:
-        return f"ERRORE CONNESSIONE: {e}"
+        print(f"❌ ERRORE GENERICO LLM: {e}")
+        return "Errore nell'elaborazione della risposta."
 
-async def main():
-    print(f"\n🚀 Quantum v2.3 (Clean & Focus) - {datetime.datetime.now()}")
+@app.post("/chat/god-mode", response_model=ChatResponse)
+async def god_mode_chat(request: ChatRequest):
+    user_input = request.message
     
-    # Storico della conversazione corrente (non persistente tra riavvii, quello lo fa Chroma)
-    chat_history = [] 
+    # 1. Recupero Intelligente Memoria
+    mem_context = "Memoria offline o vuota."
+    if memory:
+        # La soglia è gestita dentro vector_memory.py ora
+        mem_context = memory.search(user_input)
+    
+    # 2. Costruzione Messaggio
+    system_prompt = get_system_prompt()
+    full_user_msg = f"<CONTESTO_STORICO>\n{mem_context}\n</CONTESTO_STORICO>\n\nUTENTE:\n{user_input}"
+    
+    messages = [{"role": "system", "content": system_prompt}]
+    if request.history:
+        messages.extend(request.history[-4:]) # Mantiene un po' di short-term memory
+    messages.append({"role": "user", "content": full_user_msg})
 
-    while True:
-        try:
-            user_input = input("\nTu: ")
-            if user_input.lower() in ["exit", "quit"]: break
+    print(f"⚡ Elaborazione LLM (Input: {user_input[:30]}...)")
+    raw_response = await call_llm(messages)
+    
+    # 3. Tool Logic
+    tool_name, tool_query = extract_tool_command(raw_response)
+    tool_used = None
+    final_response = raw_response
 
-            # 1. Recupera Memoria
-            mem_context = memory.search(user_input)
+    if tool_name == "web_search":
+        print(f"⚙️ Tool Trigger: {tool_query}")
+        tool_used = "web_search"
+        
+        # Verifica se il tool esiste davvero
+        if tool_name in AVAILABLE_TOOLS:
+            try:
+                tool_result = AVAILABLE_TOOLS[tool_name](tool_query)
+            except Exception as e:
+                tool_result = f"Errore nell'esecuzione del tool: {e}"
             
-            # 2. Costruisci il messaggio
-            # Mettiamo il contesto NEL MESSAGGIO UTENTE, non come storico, per evitare confusione
-            full_user_msg = f"""
-<CONTESTO_MEMORIA>
-{mem_context}
-</CONTESTO_MEMORIA>
+            # Inietta il risultato e chiedi nuova risposta
+            messages.append({"role": "assistant", "content": raw_response})
+            messages.append({"role": "system", "content": f"RISULTATI TOOL:\n{tool_result}\n\nUsa questi dati per rispondere all'utente."})
+            final_response = await call_llm(messages)
+        else:
+            final_response += "\n[ERRORE SISTEMA: Tool richiesto non disponibile]"
 
-DOMANDA UTENTE:
-{user_input}
-"""
-            # Prepariamo la lista messaggi pulita per ogni turno
-            current_msgs = [
-                {"role": "system", "content": get_system_prompt()},
-            ]
-            # Aggiungiamo storico recente (max 2 turni) per mantenere il filo
-            current_msgs.extend(chat_history[-4:]) 
-            current_msgs.append({"role": "user", "content": full_user_msg})
-
-            print("Quantum sta pensando...", end="\r")
-            
-            # --- PRIMO PASSAGGIO (Decisione) ---
-            raw_response = await chat_with_llm(current_msgs)
-            
-            # Controlliamo se vuole usare un tool
-            tool_name, tool_query = extract_tool_command(raw_response)
-
-            final_answer = raw_response
-
-            if tool_name == "web_search":
-                print(f"\n⚙️  CERCO SU BRAVE: '{tool_query}'")
-                tool_output = AVAILABLE_TOOLS["web_search"](tool_query)
-                print(f"✅ TROVATO. Elaborazione...")
-
-                # --- SECONDO PASSAGGIO (Elaborazione Dati) ---
-                # Aggiungiamo i risultati alla conversazione
-                current_msgs.append({"role": "assistant", "content": raw_response})
-                current_msgs.append({"role": "system", "content": f"RISULTATI DAL WEB:\n{tool_output}\n\nOra rispondi alla domanda dell'utente usando questi dati."})
-                
-                final_answer = await chat_with_llm(current_msgs)
-
-            # Pulizia e Stampa
-            clean_answer = clean_think_tags(final_answer)
-            print(f"\nQuantum: {clean_answer}")
-
-            # Salviamo nello storico breve e nella memoria a lungo termine
-            chat_history.append({"role": "user", "content": user_input})
-            chat_history.append({"role": "assistant", "content": final_answer})
-            memory.save(user_input, clean_answer)
-
-        except KeyboardInterrupt:
-            break
-        except Exception as e:
-            print(f"\nErrore Critico: {e}")
+    clean_response = clean_think_tags(final_response)
+    
+    # 4. Salvataggio Selettivo
+    # Il filtro "anti-spam" è gestito dentro memory.save()
+    if memory:
+        memory.save(user_input, clean_response)
+    
+    return {
+        "response": clean_response,
+        "tool_used": tool_used,
+        "context_used": mem_context[:100] + "..." # Log parziale per debug
+    }
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    uvicorn.run(app, host="0.0.0.0", port=8001)

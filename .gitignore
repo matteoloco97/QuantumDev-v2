@@ -5,3 +5,4 @@ chroma_data/
 venv/
 .DS_Store
 data/
+.env
