@@ -1,81 +1,138 @@
+import sys
 import os
-import json
+import datetime
+import re
+import requests
 import asyncio
-from dotenv import load_dotenv
-from openai import AsyncOpenAI
-# Assumiamo che vector_memory sia presente (Step successivo)
-from core.vector_memory import query_documents, add_document
-from core.tools import Toolbox, TOOLS_SCHEMA
 
-load_dotenv()
+# --- CONFIGURAZIONE ---
+current_dir = os.path.dirname(os.path.abspath(__file__))
+sys.path.append(current_dir)
 
-class QuantumEngine:
-    def __init__(self):
-        # CONFIGURAZIONE TUNNEL GPU
-        self.client = AsyncOpenAI(
-            base_url="http://localhost:5000/v1", # Punta al tunnel SSH
-            api_key="sk-internal"
-        )
-        self.model = "model-placeholder" 
-        print(f"🚀 QuantumEngine v2 avviato su GPU Locale (Tunnel :5000)")
+from vector_memory import VectorMemory
+from tools import AVAILABLE_TOOLS
 
-    async def _get_memory_context(self, query: str) -> str:
+LLM_API_URL = "http://localhost:5000/v1/chat/completions"
+MODEL_NAME = "DeepSeek-R1-Distill-Qwen-32B-abliterated-Q6_K.gguf"
+
+# Inizializza memoria o fallback
+try:
+    memory = VectorMemory()
+except:
+    class DummyMemory:
+        def search(self, q): return "Nessun dato."
+        def save(self, u, a): pass
+    memory = DummyMemory()
+
+def get_system_prompt():
+    now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M")
+    return f"""
+Sei Quantum, un'Assistente AI esperto.
+OGGI È: {now}
+
+TUE REGOLE SUPREME:
+1. NON INVENTARE. Se non sai un dato aggiornato (prezzi, news, meteo), DEVI usare il tool.
+2. NON dialogare con te stesso. Rispondi solo all'ultima domanda dell'utente.
+3. Se usi un tool, scrivi ESATTAMENTE e SOLO il comando, nient'altro.
+
+SINTASSI TOOL:
+[TOOL: web_search, query: "tua ricerca qui"]
+"""
+
+def extract_tool_command(text):
+    # Cerca il comando tool ignorando il pensiero <think>...</think>
+    pattern = r'\[TOOL:\s*(\w+),\s*query:\s*"([^"]+)"\]'
+    match = re.search(pattern, text)
+    if match:
+        return match.group(1), match.group(2)
+    return None, None
+
+def clean_think_tags(text):
+    """Rimuove i pensieri dell'AI per mostrare solo la risposta pulita"""
+    return re.sub(r'<think>.*?</think>', '', text, flags=re.DOTALL).strip()
+
+async def chat_with_llm(messages):
+    payload = {
+        "model": MODEL_NAME,
+        "messages": messages,
+        "temperature": 0.3,  # Molto basso per evitare che "sogni"
+        "max_tokens": 1000
+    }
+    try:
+        response = requests.post(LLM_API_URL, json=payload, timeout=120)
+        if response.status_code == 200:
+            return response.json()['choices'][0]['message']['content']
+        return f"ERRORE API: {response.status_code}"
+    except Exception as e:
+        return f"ERRORE CONNESSIONE: {e}"
+
+async def main():
+    print(f"\n🚀 Quantum v2.3 (Clean & Focus) - {datetime.datetime.now()}")
+    
+    # Storico della conversazione corrente (non persistente tra riavvii, quello lo fa Chroma)
+    chat_history = [] 
+
+    while True:
         try:
-            docs = query_documents(session_id="global", query=query, top_k=3)
-            if not docs: return ""
-            context_str = "\n".join([f"- {d['text']}" for d in docs])
-            return f"\n🧠 MEMORIA:\n{context_str}\n"
-        except Exception: return ""
+            user_input = input("\nTu: ")
+            if user_input.lower() in ["exit", "quit"]: break
 
-    async def process(self, user_input: str) -> str:
-        memory = await self._get_memory_context(user_input)
-        messages = [
-            {"role": "system", "content": f"Sei Quantum. Rispondi in modo diretto. Usa i tool solo se serve. {memory}"},
-            {"role": "user", "content": user_input}
-        ]
+            # 1. Recupera Memoria
+            mem_context = memory.search(user_input)
+            
+            # 2. Costruisci il messaggio
+            # Mettiamo il contesto NEL MESSAGGIO UTENTE, non come storico, per evitare confusione
+            full_user_msg = f"""
+<CONTESTO_MEMORIA>
+{mem_context}
+</CONTESTO_MEMORIA>
 
-        try:
-            # 1. Decisione (Tool vs Risposta)
-            response = await self.client.chat.completions.create(
-                model=self.model, messages=messages, tools=TOOLS_SCHEMA, tool_choice="auto", temperature=0.7
-            )
-            msg = response.choices[0].message
+DOMANDA UTENTE:
+{user_input}
+"""
+            # Prepariamo la lista messaggi pulita per ogni turno
+            current_msgs = [
+                {"role": "system", "content": get_system_prompt()},
+            ]
+            # Aggiungiamo storico recente (max 2 turni) per mantenere il filo
+            current_msgs.extend(chat_history[-4:]) 
+            current_msgs.append({"role": "user", "content": full_user_msg})
 
-            # 2. Esecuzione Tool
-            if msg.tool_calls:
-                print(f"🛠️ Tool: {msg.tool_calls[0].function.name}")
-                messages.append(msg)
-                for tool in msg.tool_calls:
-                    args = json.loads(tool.function.arguments)
-                    res = "Err"
-                    if tool.function.name == "search_web": res = await Toolbox.search_web(**args)
-                    elif tool.function.name == "execute_python": res = await Toolbox.execute_python(**args)
-                    messages.append({"role": "tool", "tool_call_id": tool.id, "name": tool.function.name, "content": str(res)})
+            print("Quantum sta pensando...", end="\r")
+            
+            # --- PRIMO PASSAGGIO (Decisione) ---
+            raw_response = await chat_with_llm(current_msgs)
+            
+            # Controlliamo se vuole usare un tool
+            tool_name, tool_query = extract_tool_command(raw_response)
+
+            final_answer = raw_response
+
+            if tool_name == "web_search":
+                print(f"\n⚙️  CERCO SU BRAVE: '{tool_query}'")
+                tool_output = AVAILABLE_TOOLS["web_search"](tool_query)
+                print(f"✅ TROVATO. Elaborazione...")
+
+                # --- SECONDO PASSAGGIO (Elaborazione Dati) ---
+                # Aggiungiamo i risultati alla conversazione
+                current_msgs.append({"role": "assistant", "content": raw_response})
+                current_msgs.append({"role": "system", "content": f"RISULTATI DAL WEB:\n{tool_output}\n\nOra rispondi alla domanda dell'utente usando questi dati."})
                 
-                # 3. Sintesi Finale
-                final = await self.client.chat.completions.create(model=self.model, messages=messages)
-                answer = final.choices[0].message.content
-            else:
-                answer = msg.content
+                final_answer = await chat_with_llm(current_msgs)
 
-            # 4. Memoria
-            if len(answer) > 50: add_document(session_id="global", text=f"Q: {user_input}\nA: {answer}")
-            return answer
+            # Pulizia e Stampa
+            clean_answer = clean_think_tags(final_answer)
+            print(f"\nQuantum: {clean_answer}")
+
+            # Salviamo nello storico breve e nella memoria a lungo termine
+            chat_history.append({"role": "user", "content": user_input})
+            chat_history.append({"role": "assistant", "content": final_answer})
+            memory.save(user_input, clean_answer)
+
+        except KeyboardInterrupt:
+            break
         except Exception as e:
-            return f"❌ Errore LLM (Controlla il tunnel!): {e}"
+            print(f"\nErrore Critico: {e}")
 
 if __name__ == "__main__":
-    async def main():
-        engine = QuantumEngine()
-        try:
-            # Check connessione all'avvio
-            models = await engine.client.models.list()
-            engine.model = models.data[0].id
-            print(f"✅ Connesso a: {engine.model}")
-        except: print("⚠️ Tunnel non rilevato sulla porta 5000.")
-        
-        while True:
-            q = input("\nTu: ")
-            if q in ["exit", "quit"]: break
-            print(f"Quantum: {await engine.process(q)}")
     asyncio.run(main())

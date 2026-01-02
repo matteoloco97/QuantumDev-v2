@@ -1,28 +1,57 @@
-import asyncio
-from duckduckgo_search import DDGS
+import os
+import requests
+import json
 
-class Toolbox:
-    @staticmethod
-    async def search_web(query: str, max_results: int = 5) -> str:
-        print(f"🔎 Cerca: {query}...")
-        try:
-            results = await asyncio.to_thread(lambda: list(DDGS().text(query, max_results=max_results)))
-            if not results: return "Nessun risultato."
-            return "\n".join([f"- {r['title']}: {r['body']}" for r in results])
-        except Exception as e: return f"Errore ricerca: {e}"
+def web_search(query):
+    """
+    Esegue una ricerca usando l'API Ufficiale di Brave Search.
+    """
+    api_key = os.getenv("BRAVE_API_KEY")
+    
+    if not api_key:
+        return "ERRORE CRITICO: BRAVE_API_KEY non trovata nelle variabili d'ambiente."
 
-    @staticmethod
-    async def execute_python(code: str) -> str:
-        print(f"💻 Esegue codice...")
-        clean = code.replace("```python", "").replace("```", "").strip()
-        if any(bad in clean for bad in ['os.system', 'subprocess']): return "⛔ Vietato."
-        try:
-            proc = await asyncio.create_subprocess_exec("python3", "-c", clean, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
-            out, err = await proc.communicate()
-            return f"Out: {out.decode()}\nErr: {err.decode()}"
-        except Exception as e: return f"Errore: {e}"
+    print(f"DEBUG: Brave API Search per: {query}")
+    
+    url = "https://api.search.brave.com/res/v1/web/search"
+    headers = {
+        "X-Subscription-Token": api_key,
+        "Accept": "application/json"
+    }
+    params = {
+        "q": query,
+        "count": 3
+    }
 
-TOOLS_SCHEMA = [
-    {"type": "function", "function": {"name": "search_web", "description": "Cerca online", "parameters": {"type": "object", "properties": {"query": {"type": "string"}}, "required": ["query"]}}},
-    {"type": "function", "function": {"name": "execute_python", "description": "Esegue Python", "parameters": {"type": "object", "properties": {"code": {"type": "string"}}, "required": ["code"]}}}
-]
+    try:
+        response = requests.get(url, headers=headers, params=params, timeout=10)
+        
+        if response.status_code == 200:
+            data = response.json()
+            results = data.get('web', {}).get('results', [])
+            
+            if not results:
+                return "Nessun risultato trovato."
+
+            output = f"--- RISULTATI BRAVE PER: '{query}' ---\n"
+            for i, res in enumerate(results, 1):
+                title = res.get('title', 'No Title')
+                link = res.get('url', 'No Link')
+                desc = res.get('description', 'No Description')
+                
+                output += f"{i}. TITOLO: {title}\n"
+                output += f"   LINK: {link}\n"
+                output += f"   DESCRIZIONE: {desc}\n\n"
+            
+            return output
+        elif response.status_code == 429:
+            return "Errore: Limite richieste API raggiunto (Rate Limit)."
+        else:
+            return f"Errore API Brave: {response.status_code} - {response.text}"
+
+    except Exception as e:
+        return f"ERRORE CONNESSIONE: {str(e)}"
+
+AVAILABLE_TOOLS = {
+    "web_search": web_search
+}
