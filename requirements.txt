@@ -1,7 +1,8 @@
 fastapi
 uvicorn
-python-dotenv
-pydantic
-chromadb
 requests
-langchain-community
+python-dotenv
+chromadb
+sentence-transformers
+scikit-learn
+numpy
