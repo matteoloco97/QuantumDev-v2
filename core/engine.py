@@ -42,7 +42,7 @@ try:
     deep_vectors = router_model.encode(DEEP_CONCEPTS)
     print("✅ Semantic Router Attivo.")
 except Exception as e:
-    print(f"⚠️ Errore Router: {e}. Fallback attivo.")
+    print(f"⚠ Errore Router: {e}. Fallback attivo.")
     router_model = None
 
 app = FastAPI(title="Quantum AI API", version="7.6 (Keyword Override)")
@@ -182,7 +182,7 @@ async def god_mode_chat(request: ChatRequest, background_tasks: BackgroundTasks)
     final_response = raw_response
 
     if tool_name and tool_name in AVAILABLE_TOOLS:
-        print(f"⚙️ EXEC TOOL: {tool_name}")
+        print(f"⚙ EXEC TOOL: {tool_name}")
         if tool_name == "write_file" and "|" in tool_query:
             try:
                 fname, fcontent = tool_query.split("|", 1)
