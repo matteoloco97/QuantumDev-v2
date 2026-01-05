@@ -6,3 +6,9 @@ chromadb
 sentence-transformers
 scikit-learn
 numpy
+# --- NUOVE DIPENDENZE PER ANALISI & SCRAPING ---
+pandas
+beautifulsoup4
+lxml
+fake-useragent
+scipy

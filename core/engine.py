@@ -13,36 +13,39 @@ from dotenv import load_dotenv
 from sentence_transformers import SentenceTransformer
 from sklearn.metrics.pairwise import cosine_similarity
 
+# Setup percorsi
 current_dir = os.path.dirname(os.path.abspath(__file__))
 sys.path.append(current_dir)
 
+# Import moduli interni
 from vector_memory import VectorMemory
 from tools import AVAILABLE_TOOLS
 
 load_dotenv()
 
-# CONFIGURAZIONE
+# --- CONFIGURAZIONE ---
 LLM_API_URL = "http://localhost:5000/v1/chat/completions"
 MODEL_NAME = "DeepSeek-R1-Distill-Qwen-32B-abliterated-Q6_K.gguf"
 
 print("🧠 Caricamento Semantic Router (MiniLM)...")
 try:
     router_model = SentenceTransformer('all-MiniLM-L6-v2')
-    # CONCETTI PESANTI (Il DNA dell'Analista)
+    
+    # CONCETTI "DEEP" (Analisi + Coding)
     DEEP_CONCEPTS = [
         "analizza la situazione", "crea una strategia", "calcola le probabilità",
-        "scrivi codice python", "spiegami il motivo", "fai una previsione",
-        "studia il file", "report dettagliato", "confronta i dati", 
-        "pianificazione finanziaria", "esamina le quote", "cerca valore", 
-        "risk management", "studio approfondito", "betting exchange", "scommesse"
+        "esamina le quote", "cerca valore", "risk management", "scommesse",
+        "scrivi codice", "crea script", "debug", "refactoring", 
+        "esegui comando", "terminale", "installare", "pip install", 
+        "leggi file", "analizza progetto", "errore python", "fix bug"
     ]
     deep_vectors = router_model.encode(DEEP_CONCEPTS)
     print("✅ Semantic Router Attivo.")
 except Exception as e:
-    print(f"⚠️ Errore caricamento Router: {e}. Si userà fallback.")
+    print(f"⚠️ Errore Router: {e}. Fallback attivo.")
     router_model = None
 
-app = FastAPI(title="Quantum AI API", version="7.1 (Tuned Router)")
+app = FastAPI(title="Quantum AI API", version="7.6 (Keyword Override)")
 
 try:
     memory = VectorMemory()
@@ -58,40 +61,50 @@ class ChatResponse(BaseModel):
     tool_used: Optional[str] = None
     context_used: str
 
+# --- NUOVA LOGICA ROUTING CON OVERRIDE ---
 def detect_intent_semantic(user_input):
     clean_input = user_input.lower().strip()
     
-    # 1. FILTRO MANUALE ESTESO (Speed Assoluta)
-    # Se contiene parole di saluto, forza SPEED ignorando la semantica
-    speed_triggers = ["ciao", "hola", "test", "chi sei", "come va", "buongiorno", "ehi", "ci sei", "tutto bene"]
+    # 1. KEYWORD OVERRIDE (Se sento parole tecniche, FORZO la modalità DEEP)
+    tech_keywords = ["python", "script", "code", "json", "api", "def ", "import ", "write_file", "terminal_run", "requirements", "crea file"]
+    if any(k in clean_input for k in tech_keywords):
+        return {
+            "mode": "🧠 DEEP THINK (Keyword Override)",
+            "temperature": 0.5,
+            "max_tokens": 8000,
+            "system_instruction": "Sei Quantum Dev. Modalità Engineering. Pensa a fondo. Scrivi codice completo e funzionante.",
+            "score": 1.0
+        }
+
+    # 2. Filtro Speed (Saluti/Chat rapida)
+    speed_triggers = ["ciao", "hola", "test", "chi sei", "come va", "sei vivo"]
     if any(trigger in clean_input for trigger in speed_triggers) and len(clean_input.split()) < 5:
         return {"mode": "⚡ SPEED (Manual)", "score": 0.0}
 
-    # 2. Se il router non va, fallback su lunghezza
+    # 3. Fallback se router off
     if router_model is None:
-        return {"mode": "🧠 DEEP (Fallback)", "score": 1.0} if len(clean_input.split()) > 6 else {"mode": "⚡ SPEED (Fallback)", "score": 0.0}
+        return {"mode": "🧠 DEEP (Fallback)", "score": 1.0}
 
-    # 3. Analisi Semantica
+    # 4. Analisi Semantica (Soglia abbassata a 0.35 per sicurezza)
     try:
         input_vector = router_model.encode([user_input])
         similarities = cosine_similarity(input_vector, deep_vectors)
         max_similarity = float(np.max(similarities))
         
-        # NUOVA SOGLIA: 0.60 (Più severa)
-        if max_similarity > 0.60:
+        if max_similarity > 0.35: 
             return {
                 "mode": "🧠 DEEP THINK (Semantic)",
-                "temperature": 0.6,
+                "temperature": 0.5,
                 "max_tokens": 8000,
-                "system_instruction": "Usa il ragionamento profondo (<think>). Analizza il problema passo dopo passo. Sii dettagliato.",
+                "system_instruction": "Sei Quantum Dev, un Senior AI Engineer autonomo. Pensa profondamente (<think>) prima di agire.",
                 "score": max_similarity
             }
         else:
             return {
-                "mode": "⚡ SPEED (Semantic)",
+                "mode": "⚡ SPEED (Chat)",
                 "temperature": 0.1,
-                "max_tokens": 200, # Strozzatura massima
-                "system_instruction": "RISPONDI SUBITO IN ITALIANO. Sii breve, colloquiale e diretto. NON avviare ragionamenti complessi.",
+                "max_tokens": 500, 
+                "system_instruction": "Rispondi in modo diretto.",
                 "score": max_similarity
             }
     except:
@@ -100,23 +113,24 @@ def detect_intent_semantic(user_input):
 def clean_think_tags(text):
     return re.sub(r'<think>.*?</think>', '', text, flags=re.DOTALL).strip()
 
+def extract_tool_command(text):
+    match = re.search(r'\[TOOL:\s*(\w+),\s*query:\s*"([^"]+)"\]', text, re.DOTALL)
+    return (match.group(1), match.group(2)) if match else (None, None)
+
 async def analyze_and_save_memory(user_input: str, ai_response: str):
     if not memory: return
     try:
+        if "OUTPUT TERMINALE" in ai_response or len(ai_response) < 10: return 
         payload = {
             "model": MODEL_NAME,
-            "messages": [{"role": "user", "content": f"Estrai FATTO o 'SKIP'. In: {user_input} | Out: {ai_response}"}],
+            "messages": [{"role": "user", "content": f"Estrai un FATTO utile o rispondi 'SKIP'. User: {user_input} | AI: {ai_response}"}],
             "temperature": 0.1, "max_tokens": 150
         }
-        resp = requests.post(LLM_API_URL, json=payload, timeout=30)
+        resp = requests.post(LLM_API_URL, json=payload, timeout=20)
         content = clean_think_tags(resp.json()['choices'][0]['message']['content'])
-        if "SKIP" not in content and len(content) > 5:
+        if "SKIP" not in content:
             memory.save(user_input, content)
     except: pass
-
-def extract_tool_command(text):
-    match = re.search(r'\[TOOL:\s*(\w+),\s*query:\s*"([^"]+)"\]', text)
-    return (match.group(1), match.group(2)) if match else (None, None)
 
 async def call_llm(messages, config):
     payload = {
@@ -126,35 +140,40 @@ async def call_llm(messages, config):
     try:
         response = requests.post(LLM_API_URL, json=payload, timeout=120)
         return response.json()['choices'][0]['message']['content']
-    except: return "Errore LLM."
+    except Exception as e: return f"Errore LLM: {e}"
 
 @app.post("/chat/god-mode", response_model=ChatResponse)
 async def god_mode_chat(request: ChatRequest, background_tasks: BackgroundTasks):
     user_input = request.message
     
-    # 1. Router Decision
+    # 1. Routing
     config = detect_intent_semantic(user_input)
     print(f"🚦 ROUTER: {config['mode']} (Score: {config.get('score', 0):.2f})")
 
     mem_context = memory.search(user_input) if memory else "Nessuna."
     
-    now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M")
+    # 2. System Prompt V7.6
     system_prompt = f"""
-    Sei Quantum. DATA: {now}
-    MODE: {config['mode']}
-    ISTRUZIONI: {config.get('system_instruction', '')}
+    Sei Quantum Dev (Engine V7.6). MODE: {config['mode']}
     
-    MEMORY:
-    {mem_context}
+    TOOLKIT:
+    1. [TOOL: list_files, query: "."] -> Vedi file.
+    2. [TOOL: read_file, query: "percorso/file.py"] -> Leggi codice.
+    3. [TOOL: write_file, query: "nome.py|codice"] -> SCRIVI codice.
+    4. [TOOL: terminal_run, query: "comando"] -> ESEGUI comandi (Safety: Richiedi conferma).
+    5. [TOOL: web_search, query: "ricerca"] -> Cerca web.
+
+    REGOLE:
+    - Scrittura (`write_file`): AUTONOMO.
+    - Esecuzione (`terminal_run`): CHIEDI CONFERMA all'utente (Human-in-the-Loop) prima di lanciare.
     
-    Se mancano dati live, usa [TOOL: web_search]
+    MEMORIA: {mem_context}
     """
     
     messages = [{"role": "system", "content": system_prompt}]
     if request.history: messages.extend(request.history[-4:])
     messages.append({"role": "user", "content": user_input})
 
-    # 2. Esecuzione
     raw_response = await call_llm(messages, config)
     
     # 3. Tool Logic
@@ -162,17 +181,23 @@ async def god_mode_chat(request: ChatRequest, background_tasks: BackgroundTasks)
     tool_used = None
     final_response = raw_response
 
-    if tool_name == "web_search" and tool_name in AVAILABLE_TOOLS:
-        print(f"⚙️ Tool: {tool_query}")
-        tool_used = "web_search"
-        tool_result = AVAILABLE_TOOLS[tool_name](tool_query)
+    if tool_name and tool_name in AVAILABLE_TOOLS:
+        print(f"⚙️ EXEC TOOL: {tool_name}")
+        if tool_name == "write_file" and "|" in tool_query:
+            try:
+                fname, fcontent = tool_query.split("|", 1)
+                tool_result = AVAILABLE_TOOLS[tool_name](fname.strip(), fcontent.strip())
+            except ValueError:
+                tool_result = "Errore formato write_file."
+        else:
+            tool_result = AVAILABLE_TOOLS[tool_name](tool_query)
+            
+        tool_used = tool_name
         messages.append({"role": "assistant", "content": raw_response})
-        messages.append({"role": "system", "content": f"DATI TOOL: {tool_result}"})
-        
-        final_response = await call_llm(messages, {"temperature": 0.5, "max_tokens": 5000})
+        messages.append({"role": "system", "content": f"RISULTATO TOOL: {tool_result}. Procedi."})
+        final_response = await call_llm(messages, {"temperature": 0.4, "max_tokens": 4000})
     
     clean_response = clean_think_tags(final_response)
-    
     if memory:
         background_tasks.add_task(analyze_and_save_memory, user_input, clean_response)
     

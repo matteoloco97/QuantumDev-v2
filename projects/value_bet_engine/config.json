@@ -1,0 +1,9 @@
+[
+    "README.md",
+    "requirements.txt",
+    "database.py",
+    "scraper.py",
+    "main.py",
+    "config.json",
+    "utils.py"
+]

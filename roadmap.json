@@ -1,0 +1,13 @@
+{
+    "goal": "Voglio creare un sistema di raccolta dati professionale.",
+    "status": "DONE",
+    "tasks": [
+        "Creare file requirements.txt",
+        "Scrivere scraper.py",
+        "Scrivere database.py",
+        "Scrivere main.py",
+        "Testare ogni modulo separatamente"
+    ],
+    "current_task_index": 5,
+    "completed_files": []
+}
