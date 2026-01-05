@@ -2,10 +2,11 @@ import requests
 import json
 import os
 import subprocess
+import time
+import sys
 import re
-import ast
 
-# CONFIGURAZIONE
+# --- CONFIGURAZIONE ---
 API_URL = "http://localhost:8001/chat/god-mode"
 BASE_DIR = "projects"
 
@@ -20,35 +21,36 @@ class Colors:
     ENDC = '\033[0m'
     BOLD = '\033[1m'
 
-def print_box(title, content, color=Colors.CYAN):
-    print(f"\n{color}┌─ {title} {'─' * (60 - len(title))}┐{Colors.ENDC}")
-    lines = content.split('\n')
-    for line in lines:
-        while len(line) > 60:
-            print(f"{color}│ {line[:60]}{Colors.ENDC}")
-            line = line[60:]
-        print(f"{color}│ {line}{' ' * (60 - len(line))}│{Colors.ENDC}")
-    print(f"{color}└{'─' * 63}┘{Colors.ENDC}")
+def print_log(role, text, color=Colors.ENDC):
+    print(f"{color}{Colors.BOLD}[{role}]{Colors.ENDC} {text}")
 
-def extract_thought(text):
-    think_match = re.search(r'<think>(.*?)</think>', text, re.DOTALL)
-    thought = think_match.group(1).strip() if think_match else "Analisi implicita..."
-    final_response = re.sub(r'<think>.*?</think>', '', text, flags=re.DOTALL).strip()
-    return thought, final_response
+def ensure_project_dir(project_name):
+    path = os.path.join(BASE_DIR, project_name)
+    if not os.path.exists(path):
+        os.makedirs(path)
+    return path
+
+# --- CORE INTELLIGENCE ---
 
 def extract_code_block(text):
     """
-    Estrae il codice dai blocchi markdown.
-    FIX V13.2: Regex migliorato per accettare qualsiasi tag (text, txt, python) o nessuno.
+    Estrae il codice dai blocchi markdown. 
+    È robusto: cerca python, bash, json o blocchi generici.
     """
-    # [\w+\-]* -> Accetta parole, trattini o nulla dopo i backtick
-    match = re.search(r'```[\w+\-]*\n(.*?)```', text, re.DOTALL)
+    # Pattern 1: Blocco con linguaggio specificato
+    match = re.search(r'```(?:\w+)?\n(.*?)```', text, re.DOTALL)
     if match:
         return match.group(1).strip()
+    
+    # Pattern 2: Blocco senza newline immediato (caso raro ma possibile)
+    match = re.search(r'```(.*?)```', text, re.DOTALL)
+    if match:
+        return match.group(1).strip()
+        
     return None
 
 def extract_json_list(text):
-    """Estrae una lista JSON dalla risposta dell'AI."""
+    """Estrae una lista JSON in modo 'fuzzy' (cerca le parentesi quadre)."""
     try:
         match = re.search(r'\[.*\]', text, re.DOTALL)
         if match:
@@ -60,115 +62,188 @@ def extract_json_list(text):
 def call_ai(message, history=[]):
     payload = {"message": message, "history": history}
     try:
+        # Timeout alto per scrittura codice
         resp = requests.post(API_URL, json=payload, timeout=300)
-        return resp.json().get("response", "")
+        data = resp.json()
+        return data.get("response", "")
     except Exception as e:
         return f"ERRORE API: {e}"
 
-def main():
-    os.system('clear')
-    print(f"{Colors.HEADER}╔══════════════════════════════════════════════════════════╗")
-    print(f"║     QUANTUM ARCHITECT V13.2 (Robust & Pragmatic)         ║")
-    print(f"╚══════════════════════════════════════════════════════════╝{Colors.ENDC}")
-    
-    p_name = input(f"{Colors.CYAN}Nome Progetto: {Colors.ENDC}").strip().replace(" ", "_")
-    if not p_name: p_name = "project_dynamic"
-    
-    project_root = os.path.join(BASE_DIR, p_name)
-    if not os.path.exists(project_root):
-        os.makedirs(project_root)
+# --- FASI DEL PROCESSO ---
 
-    user_goal = input(f"{Colors.CYAN}Descrivi il Software: {Colors.ENDC}")
-
-    history = []
-
-    # --- FASE 1: BLUEPRINT (PIANIFICAZIONE STRUTTURA) ---
-    print(f"\n{Colors.HEADER}--- FASE 1: ARCHITETTURA E PIANIFICAZIONE ---{Colors.ENDC}")
+def phase_1_blueprint(p_name, goal):
+    """Definisce l'architettura."""
+    print_log("ARCHITETTO", "Disegno blueprint...", Colors.CYAN)
+    prompt = f"""
+    SEI UN SOFTWARE ARCHITECT.
+    PROGETTO: {p_name}
+    OBIETTIVO: {goal}
     
-    # FIX V13.2: Prompt "Pragmatico" per evitare over-engineering
-    blueprint_prompt = f"""
-    SEI UN SOFTWARE ARCHITECT PRAGMATICO.
-    OBIETTIVO UTENTE: {user_goal}
-    
-    TASK:
-    Definisci la lista esatta dei file da creare.
-    
-    REGOLE CRITICHE:
-    1. ANALISI RICHIESTA: Se l'utente ha elencato dei file specifici (es. "Voglio main.py, scraper.py"), DEVI RISPETTARE ESATTAMENTE QUELLA LISTA. Non aggiungere cartelle 'src', 'docs' o 'tests' se non richieste.
-    2. SOLO SE L'UTENTE È VAGO: Allora e solo allora decidi tu la struttura migliore.
-    3. SEMPLICITÀ: Prediligi una struttura piatta (file nella root) per progetti piccoli.
-    4. FORMATO: Rispondi ESCLUSIVAMENTE con una lista JSON di stringhe.
-    
-    ESEMPIO OUTPUT VALIDO:
-    ["README.md", "requirements.txt", "database.py", "scraper.py", "main.py"]
+    Elenca i file necessari in una lista JSON.
+    Includi SEMPRE: main.py, requirements.txt, README.md.
+    Rispondi SOLO con la lista JSON. Esempio: ["main.py", "utils.py"]
     """
     
-    print(f"{Colors.BLUE}Generazione Blueprint...{Colors.ENDC}")
-    resp = call_ai(blueprint_prompt, history)
-    thought, content = extract_thought(resp)
-    print_box("RAGIONAMENTO ARCHITETTO", thought, Colors.GREY)
+    resp = call_ai(prompt)
+    files = extract_json_list(resp)
     
-    files_to_create = extract_json_list(content)
+    if not files:
+        print_log("SYSTEM", "Blueprint confuso, uso standard fallback.", Colors.WARNING)
+        return ["requirements.txt", "database.py", "scraper.py", "analyzer.py", "main.py", "README.md"]
     
-    if not files_to_create:
-        print(f"{Colors.FAIL}Errore: L'AI non ha generato una lista file valida. Uso fallback standard.{Colors.ENDC}")
-        files_to_create = ["main.py", "requirements.txt", "README.md"]
-    else:
-        print(f"{Colors.GREEN}Blueprint Approvato: {files_to_create}{Colors.ENDC}")
-        history.append({"role": "user", "content": blueprint_prompt})
-        history.append({"role": "assistant", "content": json.dumps(files_to_create)})
+    return files
 
-    # --- FASE 2: COSTRUZIONE (LOOP DINAMICO) ---
-    print(f"\n{Colors.HEADER}--- FASE 2: COSTRUZIONE ({len(files_to_create)} file) ---{Colors.ENDC}\n")
-
-    for i, filename in enumerate(files_to_create):
-        target_file = os.path.join(project_root, filename)
+def phase_2_construction(project_path, files, goal):
+    """Genera i file con controllo 'Anti-Vuoto'."""
+    print_log("COSTRUTTORE", "Avvio stesura codice...", Colors.CYAN)
+    history = []
+    
+    for filename in files:
+        file_path = os.path.join(project_path, filename)
+        print(f"{Colors.BLUE}   Scrivo {filename}...{Colors.ENDC}", end="\r")
         
-        os.makedirs(os.path.dirname(target_file), exist_ok=True)
-        
-        step_num = i + 1
-        print(f"{Colors.BLUE}{Colors.BOLD}STEP {step_num}: Generazione {filename}...{Colors.ENDC}")
-        
-        code_prompt = f"""
-        TASK: Scrivi il codice COMPLETO per il file '{filename}'.
-        CONTESTO PROGETTO: {user_goal}
-        STRUTTURA PREVISTA: {files_to_create}
+        prompt = f"""
+        TASK: Scrivi il contenuto completo per '{filename}'.
+        PROGETTO: {os.path.basename(project_path)}
+        CONTESTO: {goal}
         
         REGOLE:
-        1. Inserisci SOLO il contenuto del file dentro un blocco markdown (```python, ```json, etc).
-        2. Sii professionale. Includi commenti.
+        1. Fornisci SOLO il codice all'interno di un blocco Markdown ```.
+        2. Non aggiungere commenti fuori dal codice.
+        3. Se è python, usa codice robusto e gestisci errori.
         """
         
+        # RETRY LOOP (Anti-Empty File)
         attempts = 0
         success = False
-        while attempts < 3 and not success:
-            full_resp = call_ai(code_prompt, history)
-            thought, _ = extract_thought(full_resp)
+        
+        while attempts < 3:
+            resp = call_ai(prompt, history)
+            code = extract_code_block(resp)
             
-            if attempts == 0:
-                print_box(f"PENSIERO DEV ({filename})", thought, Colors.GREY)
-            
-            code = extract_code_block(full_resp)
-            
-            if code:
-                with open(target_file, "w") as f:
+            if code and len(code) > 10: # Minimo 10 caratteri per essere valido
+                with open(file_path, "w") as f:
                     f.write(code)
-                print(f"{Colors.GREEN}✅ {filename} scritto.{Colors.ENDC}")
-                history.append({"role": "user", "content": code_prompt})
-                history.append({"role": "assistant", "content": f"Ho creato {filename}."})
+                print(f"{Colors.GREEN}✅ {filename} salvato ({len(code)} bytes).     {Colors.ENDC}")
+                history.append({"role": "user", "content": f"Codice per {filename}"})
+                history.append({"role": "assistant", "content": "Fatto."})
                 success = True
+                break
             else:
-                print(f"{Colors.WARNING}⚠️ Codice non trovato. Riprovo...{Colors.ENDC}")
-                code_prompt = f"ERRORE: Non hai messo il codice nel blocco ```. Riscrivi {filename}."
                 attempts += 1
+                print(f"{Colors.WARNING}⚠️ {filename} vuoto o malformato (Tentativo {attempts}/3). Riprovo...{Colors.ENDC}")
+                prompt += "\nIMPORTANTE: La tua risposta precedente non conteneva un blocco di codice valido. Riscrivilo interamente dentro ```."
+        
+        if not success:
+            print(f"\n{Colors.FAIL}❌ ERRORE CRITICO: Impossibile generare {filename}. Stop.{Colors.ENDC}")
+            return False # Blocca tutto se manca un file
+            
+    return True
+
+def phase_3_runtime(project_path):
+    """Esegue e ripara (Self-Healing senza JSON)."""
+    print_log("RUNTIME", "Avvio main.py...", Colors.CYAN)
     
-    print(f"\n{Colors.HEADER}--- PROGETTO COMPLETATO ---{Colors.ENDC}")
-    print(f"Tutti i file sono in: {project_root}")
+    # 1. Installazione Dipendenze
+    if os.path.exists(os.path.join(project_path, "requirements.txt")):
+        print_log("PIP", "Installazione dipendenze...", Colors.GREY)
+        subprocess.run(["pip", "install", "-r", "requirements.txt"], cwd=project_path, capture_output=True)
+
+    # 2. Execution Loop con Auto-Fix
+    main_file = "main.py"
+    max_retries = 3
     
-    if "main.py" in files_to_create:
-        print(f"{Colors.CYAN}Per avviare: cd {project_root} && python3 main.py{Colors.ENDC}")
-    elif "src/main.py" in files_to_create:
-        print(f"{Colors.CYAN}Per avviare: cd {project_root} && python3 src/main.py{Colors.ENDC}")
+    for attempt in range(max_retries):
+        print(f"{Colors.WARNING}▶ Tentativo avvio {attempt+1}/{max_retries}...{Colors.ENDC}")
+        
+        res = subprocess.run(
+            ["python3", main_file], 
+            cwd=project_path, 
+            capture_output=True, 
+            text=True,
+            timeout=30
+        )
+        
+        if res.returncode == 0:
+            print_log("SUCCESS", "Il software gira correttamente!", Colors.GREEN)
+            print(f"\n{Colors.GREEN}{res.stdout[:1000]}{Colors.ENDC}")
+            return
+        
+        # GESTIONE ERRORE
+        error_msg = res.stderr
+        print(f"{Colors.FAIL}❌ Crash rilevato:\n{error_msg[-500:]}{Colors.ENDC}")
+        
+        if attempt < max_retries - 1:
+            print_log("MEDICO", "Analisi errore e patching...", Colors.CYAN)
+            
+            # Prompt di riparazione che chiede CODICE, non JSON
+            fix_prompt = f"""
+            HO RILEVATO UN ERRORE DURANTE L'ESECUZIONE DI {main_file}.
+            
+            ERRORE:
+            {error_msg[-1000:]}
+            
+            TASK:
+            Identifica quale file causa l'errore (spesso è main.py o un modulo importato).
+            Riscrivi INTERAMENTE il codice corretto per quel file.
+            
+            FORMATO RISPOSTA:
+            Nome del file nella prima riga (es: "database.py")
+            Poi il blocco di codice markdown ```python ... ```
+            """
+            
+            fix_resp = call_ai(fix_prompt)
+            
+            # Parsing "Grezzo" della risposta (Molto più robusto del JSON)
+            lines = fix_resp.split('\n')
+            target_file = None
+            
+            # Cerca un nome file probabile nelle prime righe
+            for line in lines[:5]:
+                if ".py" in line:
+                    target_file = re.sub(r'[^\w\._-]', '', line).strip() # Pulisce caratteri strani
+                    break
+            
+            new_code = extract_code_block(fix_resp)
+            
+            if target_file and new_code:
+                full_path = os.path.join(project_path, target_file)
+                with open(full_path, "w") as f:
+                    f.write(new_code)
+                print_log("MEDICO", f"Patch applicata a {target_file}.", Colors.GREEN)
+            else:
+                print_log("MEDICO", "Non sono riuscito a isolare il file o il codice per la patch.", Colors.FAIL)
+                # Fallback: Riscrivi main.py se non si capisce
+                if new_code:
+                    with open(os.path.join(project_path, "main.py"), "w") as f:
+                        f.write(new_code)
+                    print_log("MEDICO", "Patch fallback applicata a main.py", Colors.WARNING)
+
+    print_log("FAIL", "Impossibile avviare il software dopo i tentativi.", Colors.FAIL)
+
+def main():
+    os.system('clear')
+    print(f"{Colors.HEADER}╔════════════════════════════════════════════╗")
+    print(f"║      QUANTUM ARCHITECT V16 (Bulletproof)   ║")
+    print(f"╚════════════════════════════════════════════╝{Colors.ENDC}")
+    
+    p_name = input("Nome Progetto: ").strip().replace(" ", "_")
+    goal = input("Obiettivo: ")
+    
+    proj_dir = ensure_project_dir(p_name)
+    
+    # 1. Blueprint
+    files = phase_1_blueprint(p_name, goal)
+    print(f"Blueprint approvato: {files}")
+    
+    # 2. Costruzione (con stop on error)
+    success = phase_2_construction(proj_dir, files, goal)
+    if not success:
+        print("Costruzione fallita. Interruzione.")
+        return
+        
+    # 3. Runtime & Fixing
+    phase_3_runtime(proj_dir)
 
 if __name__ == "__main__":
     main()

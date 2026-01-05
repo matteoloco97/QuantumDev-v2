@@ -1,0 +1,61 @@
+import pandas as pd
+from tabulate import tabulate
+from colorama import Fore, init
+init()
+
+from database import save_match, get_all_matches
+from scraper import scrape_data
+from analyzer import analyze_opportunities
+
+def initialize_db():
+    """Inizializza la tabella se non esiste."""
+    try:
+        # Verifica se la tabella è vuota salvando un record di prova
+        test_match = {"match": "test", "bookmaker": "test",
+                      "odd_1": 2.0, "odd_x": 3.0, "odd_2": 4.0}
+        save_match(test_match)
+        # Se esiste, cancella il record di prova
+        df = get_all_matches()
+        if not df.empty:
+            df = df[df.match != "test"]
+            df.to_sql('odds', con=get_db_connection(), index=False, if_exists='replace')
+    except:
+        pass
+
+def main():
+    """Funzione principale che gestisce tutto."""
+    print("Inizio del motore di analisi Value Bet...")
+    
+    # Inizializza il database
+    initialize_db()
+    
+    # Esegui lo scraping
+    url = 'https://www.oddsportal.com/football/england/premier-league/'
+    teams, odds, dates = scrape_data(url)
+    
+    # Salva i dati nel database
+    for match in teams:
+        data = {
+            "match": f"{teams[0]} vs {teams[1]}",
+            "bookmaker": "Simulator",
+            "odd_1": float(odds[0]),
+            "odd_x": float(odds[1]),
+            "odd_2": float(odds[2])
+        }
+        save_match(data)
+    
+    # Recupera tutti i dati dal database
+    df = get_all_matches()
+    
+    # Analizza le opportunità
+    opportunities = analyze_opportunities(df)
+    
+    # Mostra il report finale
+    print("\n\nRISULTATO:")
+    if not opportunities.empty:
+        print(Fore.GREEN + tabulate(opportunities, headers='keys', tablefmt='fancy_grid'))
+    else:
+        print("Nessun Value Bet trovato.")
+
+if __name__ == "__main__":
+    main()
