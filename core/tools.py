@@ -1,17 +1,14 @@
 import os
 import requests
 import json
+import subprocess
+from bs4 import BeautifulSoup
+from fake_useragent import UserAgent
 
-# --- TOOL ESISTENTE: RICERCA WEB ---
+# --- TOOL 1: RICERCA WEB (Brave) ---
 def web_search(query):
-    """Esegue una ricerca usando l'API Ufficiale di Brave Search."""
     api_key = os.getenv("BRAVE_API_KEY")
-    if not api_key: return "ERRORE: BRAVE_API_KEY mancante."
-    
-    # ... (Il resto del codice di web_search rimane uguale, lo abbrevio per leggibilità) ...
-    # Se vuoi ti ricopio tutto il blocco, ma basta mantenere quello che avevi prima.
-    # Assumo tu mantenga la funzione web_search come era nel file caricato.
-    # Qui sotto metto solo il placeholder per brevità, tu lascia il codice originale.
+    if not api_key: return "ERRORE: BRAVE_API_KEY mancante nel file .env"
     try:
         url = "https://api.search.brave.com/res/v1/web/search"
         headers = {"X-Subscription-Token": api_key}
@@ -27,33 +24,73 @@ def web_search(query):
     except Exception as e: return f"Errore Web: {e}"
     return "Errore generico ricerca."
 
-# --- NUOVO TOOL: SCRITTURA FILE ---
-def write_file(filename, content):
-    """
-    Scrive del codice o testo in un file. 
-    Uso: Utile per creare script python, salvare report o prendere appunti lunghi.
-    """
+# --- TOOL 2: LETTORE DOCUMENTAZIONE ---
+def read_url(url):
     try:
-        # Sicurezza: Impediamo di scrivere fuori dalla cartella di lavoro o sovrascrivere file core
-        if "core/" in filename or "engine.py" in filename or "docker" in filename:
-            return "ERRORE SICUREZZA: Non posso sovrascrivere i miei file vitali (core/*)."
-        
-        # Creiamo la cartella 'generated_software' se non esiste
-        base_path = "generated_software"
-        if not os.path.exists(base_path):
-            os.makedirs(base_path)
-            
+        ua = UserAgent()
+        headers = {'User-Agent': ua.random}
+        resp = requests.get(url, headers=headers, timeout=15)
+        if resp.status_code != 200: return f"Errore: Status code {resp.status_code}"
+        soup = BeautifulSoup(resp.text, 'html.parser')
+        for script in soup(["script", "style", "nav", "footer"]): script.decompose()
+        text = soup.get_text(separator='\n')
+        lines = (line.strip() for line in text.splitlines())
+        clean_text = '\n'.join(chunk for chunk in lines if chunk)
+        return f"--- CONTENUTO URL: {url} ---\n{clean_text[:8000]}..."
+    except Exception as e: return f"Errore lettura URL: {str(e)}"
+
+# --- TOOL 3: SCRITTURA FILE ---
+def write_file(filename, content):
+    try:
+        if "core/" in filename or "engine.py" in filename:
+            return "ERRORE SICUREZZA: Accesso negato ai file core."
+        base_path = os.getcwd()
         full_path = os.path.join(base_path, filename)
-        
+        os.makedirs(os.path.dirname(full_path), exist_ok=True)
         with open(full_path, "w", encoding="utf-8") as f:
             f.write(content)
-            
-        return f"✅ FILE SALVATO CORRETTAMENTE: {full_path}. Puoi eseguirlo ora."
-    except Exception as e:
-        return f"Errore scrittura file: {str(e)}"
+        return f"✅ FILE SALVATO: {filename}"
+    except Exception as e: return f"Errore scrittura file: {str(e)}"
 
-# Mappa dei tool disponibili per l'Engine
+# --- TOOL 4: TERMINAL RUNNER (NUOVO - IL BRACCIO ESECUTIVO) ---
+def terminal_run(command):
+    """
+    Esegue comandi shell all'interno del container Docker.
+    È qui che avviene la magia dell'esecuzione isolata.
+    """
+    try:
+        # Security: Blocchiamo comandi distruttivi
+        forbidden = ["rm -rf /", ":(){ :|:& };:", "wget", "curl"] 
+        if any(bad in command for bad in forbidden):
+            return "ERRORE SICUREZZA: Comando non consentito."
+
+        # Eseguiamo il comando con timeout di 60 secondi
+        result = subprocess.run(
+            command, 
+            shell=True, 
+            capture_output=True, 
+            text=True, 
+            timeout=60,
+            cwd=os.getcwd() # Esegue nella root del container (/app)
+        )
+        
+        output = result.stdout
+        errors = result.stderr
+        
+        if result.returncode == 0:
+            return f"✅ SUCCESS:\n{output}"
+        else:
+            return f"❌ ERROR (Code {result.returncode}):\n{output}\n{errors}"
+            
+    except subprocess.TimeoutExpired:
+        return "❌ TIMEOUT: Il processo ha impiegato più di 60 secondi."
+    except Exception as e:
+        return f"❌ ERRORE EXEC: {str(e)}"
+
+# Mappa dei tool disponibili
 AVAILABLE_TOOLS = {
     "web_search": web_search,
-    "write_file": write_file
+    "read_url": read_url,
+    "write_file": write_file,
+    "terminal_run": terminal_run  # <--- REGISTRATO
 }
