@@ -30,6 +30,6 @@ services:
       - REDIS_HOST=localhost
       - CHROMA_HOST=localhost
       # BRAVE_API_KEY è ora nel file .env, non qui!
-    # Il comando ora avvia il server API sulla porta 8001
-    command: uvicorn core.engine:app --host 0.0.0.0 --port 8001 --reload
+    # Il comando avvia il server API in modalità STABILE (Nessun reload automatico)
+    command: uvicorn core.engine:app --host 0.0.0.0 --port 8001
     network_mode: host

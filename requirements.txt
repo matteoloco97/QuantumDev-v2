@@ -6,6 +6,7 @@ chromadb
 sentence-transformers
 scikit-learn
 numpy
+rich
 # --- NUOVE DIPENDENZE PER ANALISI & SCRAPING ---
 pandas
 beautifulsoup4
