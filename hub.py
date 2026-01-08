@@ -5,6 +5,7 @@ import sys
 import re
 import time
 import glob
+import codecs
 
 # --- CHECK DIPENDENZE GRAFICHE ---
 try:
@@ -86,12 +87,35 @@ def save_session(name, history):
     with open(path, 'w') as f: json.dump(history, f, indent=2)
 
 def extract_code_block(text):
-    """Estrae codice da blocchi markdown, gestendo <think> tags di DeepSeek-R1"""
+    """
+    Estrae codice da blocchi markdown, gestendo <think> tags di DeepSeek-R1.
+    🔧 FIX: Gestisce escape sequences letterali (\n → newline reale)
+    """
+    # 1. Rimuovi <think> tags
     clean = re.sub(r'<think>.*?</think>', '', text, flags=re.DOTALL)
+    
+    # 2. Estrai blocchi di codice
     matches = re.findall(r'```(?:\w+)?\s*(.*?)```', clean, re.DOTALL)
-    if matches: 
-        return max(matches, key=len).strip()
-    return None
+    if not matches:
+        return None
+    
+    # 3. Prendi il blocco più lungo
+    code = max(matches, key=len).strip()
+    
+    # 4. 🔧 FIX: Unescape se contiene literal escape sequences
+    if '\\n' in code:
+        real_newlines = code.count('\n')
+        escaped_newlines = code.count('\\n')
+        
+        # Se >50% delle newline sono escaped, facciamo unescape
+        if escaped_newlines > real_newlines * 0.5:
+            try:
+                code = codecs.decode(code, 'unicode_escape')
+            except Exception:
+                # Fallback manuale
+                code = code.replace('\\n', '\n').replace('\\t', '\t').replace('\\r', '\r')
+    
+    return code
 
 def extract_json_from_reasoning(text):
     """Parser JSON ottimizzato per DeepSeek-R1"""
