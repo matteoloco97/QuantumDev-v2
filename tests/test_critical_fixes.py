@@ -122,12 +122,19 @@ class TestSecurityFixes:
         result = terminal_run("rm -rf /home")
         assert "non consentito" in result or "ERRORE SICUREZZA" in result
     
+    def test_terminal_path_in_command(self):
+        """Test that paths in commands are blocked"""
+        result = terminal_run("/usr/bin/ls")
+        assert "ERRORE SICUREZZA" in result
+        assert "Path nel comando" in result
+    
     def test_terminal_allowed_command(self):
         """Test that whitelisted commands work"""
         result = terminal_run("ls")
-        # Should execute (might fail or succeed depending on environment)
-        # We just check it doesn't return a security error
-        assert "non consentito" not in result or "OUTPUT" in result
+        # Should execute successfully or fail due to environment, but not be blocked by whitelist
+        # We verify it doesn't show a whitelist/security error
+        assert "non consentito" not in result
+        assert "ERRORE SICUREZZA" not in result or "Pattern pericoloso" not in result
 
 
 class TestValidWrites:
@@ -140,8 +147,9 @@ class TestValidWrites:
         assert "✅" in result or "FILE SALVATO" in result
         
         # Cleanup
+        test_file = os.path.join(os.getcwd(), "projects/test_file.txt")
         try:
-            os.remove("/home/runner/work/QuantumDev-v2/QuantumDev-v2/projects/test_file.txt")
+            os.remove(test_file)
         except:
             pass
     
@@ -152,8 +160,9 @@ class TestValidWrites:
         assert "✅" in result or "FILE SALVATO" in result
         
         # Cleanup
+        test_file = os.path.join(os.getcwd(), "memories/test_memory.json")
         try:
-            os.remove("/home/runner/work/QuantumDev-v2/QuantumDev-v2/memories/test_memory.json")
+            os.remove(test_file)
         except:
             pass
 

@@ -104,13 +104,17 @@ def terminal_run(command):
         if not parsed:
             return "ERRORE: Comando vuoto"
         
-        # 2. Whitelist enforcement
+        # 2. Whitelist enforcement - validate only the base command name
         base_cmd = os.path.basename(parsed[0])
+        # Remove any path components to prevent bypass with /usr/bin/../../../bin/malicious
+        if '/' in parsed[0] or '\\' in parsed[0]:
+            return "ERRORE SICUREZZA: Path nel comando non consentito"
+        
         if base_cmd not in ALLOWED_COMMANDS:
             return f"ERRORE SICUREZZA: '{base_cmd}' non consentito. Whitelist: {ALLOWED_COMMANDS}"
         
         # 3. Dangerous pattern detection
-        dangerous = [';', '&&', '||', '|', '>', '<', '`', '$(', 'rm -rf']
+        dangerous = [';', '&&', '||', '|', '>', '<', '`', '$(', 'rm', 'wget', 'curl']
         full_cmd = ' '.join(parsed)
         if any(p in full_cmd for p in dangerous):
             return "ERRORE SICUREZZA: Pattern pericoloso rilevato"
