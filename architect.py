@@ -5,6 +5,7 @@ import subprocess
 import time
 import sys
 import re
+import codecs
 
 # --- CONFIGURAZIONE ---
 API_URL = "http://localhost:8001/chat/god-mode"
@@ -36,18 +37,34 @@ def extract_code_block(text):
     """
     Estrae il codice dai blocchi markdown. 
     È robusto: cerca python, bash, json o blocchi generici.
+    🔧 FIX: Gestisce escape sequences letterali (\n → newline reale)
     """
     # Pattern 1: Blocco con linguaggio specificato
     match = re.search(r'```(?:\w+)?\n(.*?)```', text, re.DOTALL)
     if match:
-        return match.group(1).strip()
+        code = match.group(1).strip()
+    else:
+        # Pattern 2: Blocco senza newline immediato (caso raro ma possibile)
+        match = re.search(r'```(.*?)```', text, re.DOTALL)
+        if match:
+            code = match.group(1).strip()
+        else:
+            return None
     
-    # Pattern 2: Blocco senza newline immediato (caso raro ma possibile)
-    match = re.search(r'```(.*?)```', text, re.DOTALL)
-    if match:
-        return match.group(1).strip()
+    # 🔧 FIX: Unescape se contiene literal escape sequences
+    if '\\n' in code:
+        real_newlines = code.count('\n')
+        escaped_newlines = code.count('\\n')
         
-    return None
+        # Se >50% delle newline sono escaped, facciamo unescape
+        if escaped_newlines > real_newlines * 0.5:
+            try:
+                code = codecs.decode(code, 'unicode_escape')
+            except Exception:
+                # Fallback manuale
+                code = code.replace('\\n', '\n').replace('\\t', '\t').replace('\\r', '\r')
+    
+    return code
 
 def extract_json_list(text):
     """Estrae una lista JSON in modo 'fuzzy' (cerca le parentesi quadre)."""
