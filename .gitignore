@@ -6,3 +6,5 @@ venv/
 .DS_Store
 data/
 .env
+*.backup
+projects/test_repair/

@@ -1,1 +1,0 @@
-import os\nprint("Hello")\ndef main():\n    return True
