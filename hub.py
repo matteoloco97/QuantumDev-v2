@@ -562,8 +562,8 @@ def validate_requirements(requirements_text):
     Returns (is_valid, warnings, fixed_requirements)
     """
     KNOWN_CONFLICTS = {
-        ('pandas', '>=2.0'): [('numpy', '<1.20', 'numpy>=1.20.0,<2.0.0')],
-        ('tensorflow', '>=2.0'): [('numpy', '<1.19', 'numpy>=1.19.0,<2.0.0')],
+        ('pandas', '>=2.0'): [('numpy', '<1.20', '>=1.20.0,<2.0.0')],
+        ('tensorflow', '>=2.0'): [('numpy', '<1.19', '>=1.19.0,<2.0.0')],
     }
     
     warnings = []
@@ -591,8 +591,9 @@ def validate_requirements(requirements_text):
                                 f"⚠️ CONFLICT: {pkg1}{pkg1_ver} incompatible with {conflict_pkg}{pkg2_ver}\n"
                                 f"   Suggested: {conflict_pkg}{suggested_fix}"
                             )
-                            # Auto-fix
+                            # Auto-fix - suggested_fix is just the version spec
                             packages[conflict_pkg]['line'] = f"{conflict_pkg}{suggested_fix}"
+                            packages[conflict_pkg]['spec'] = suggested_fix
     
     # Rebuild requirements
     fixed_lines = [pkg['line'] for pkg in packages.values()]
