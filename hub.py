@@ -117,23 +117,108 @@ def extract_code_block(text):
     
     return code
 
+def sanitize_filenames(files):
+    """
+    Clean and validate filenames.
+    - Remove duplicates
+    - Filter out library names
+    - Ensure main.py and requirements.txt are present
+    - Lowercase file extensions
+    """
+    LIBRARY_NAMES = {"requests", "json", "pandas", "numpy", "beautifulsoup4", "selenium", "bs4", "lxml"}
+    
+    cleaned = []
+    seen = set()
+    
+    for f in files:
+        # Normalize
+        f = str(f).strip()
+        if not f:
+            continue
+        
+        # Skip libraries
+        base_name = f.replace('.py', '').replace('.txt', '').replace('.md', '').replace('.json', '')
+        if base_name.lower() in LIBRARY_NAMES:
+            continue
+        
+        # Deduplicate
+        if f in seen:
+            continue
+        seen.add(f)
+        
+        # Validate extension
+        if any(f.endswith(ext) for ext in ['.py', '.txt', '.md', '.json', '.yml', '.yaml', '.toml', '.cfg']):
+            cleaned.append(f)
+    
+    # Ensure essentials
+    if "main.py" not in cleaned:
+        cleaned.insert(0, "main.py")
+    if "requirements.txt" not in cleaned:
+        cleaned.append("requirements.txt")
+    
+    return cleaned
+
 def extract_json_from_reasoning(text):
-    """Parser JSON ottimizzato per DeepSeek-R1"""
+    """
+    Ultra-robust JSON parser with multiple fallback strategies.
+    Handles: pure JSON, numbered lists, bullet points, natural language.
+    """
+    # 1. Clean reasoning tags
     clean = re.sub(r'<think>.*?</think>', '', text, flags=re.DOTALL)
     clean = clean.replace("```json", "").replace("```", "").strip()
     
+    # 2. Unescape if needed (like code blocks)
+    if '\\n' in clean and clean.count('\\n') > clean.count('\n') * 0.5:
+        try:
+            clean = codecs.decode(clean, 'unicode_escape')
+        except:
+            pass
+    
+    # STRATEGY 1: Pure JSON array
     match = re.search(r'\[.*?\]', clean, re.DOTALL)
     if match:
         try:
             parsed = json.loads(match.group(0))
-            if isinstance(parsed, list) and all(isinstance(x, str) for x in parsed):
-                return parsed
+            if isinstance(parsed, list):
+                files = [str(x) for x in parsed if isinstance(x, str)]
+                if files:
+                    return sanitize_filenames(files)
         except json.JSONDecodeError:
             pass
     
-    py_files = re.findall(r'\b(\w+\.(?:py|txt|md|json))\b', clean)
-    if py_files:
-        return list(set(py_files))
+    # STRATEGY 2: JSON object with "files" key
+    match = re.search(r'\{[^}]*"files"\s*:\s*\[.*?\][^}]*\}', clean, re.DOTALL)
+    if match:
+        try:
+            obj = json.loads(match.group(0))
+            if 'files' in obj and isinstance(obj['files'], list):
+                return sanitize_filenames(obj['files'])
+        except json.JSONDecodeError:
+            pass
+    
+    # STRATEGY 3: Numbered list (1. file.py\n2. file2.py)
+    numbered = re.findall(r'^\s*\d+\.\s*(\S+\.(?:py|txt|md|json|yml|yaml|toml|cfg))', clean, re.MULTILINE | re.IGNORECASE)
+    if numbered and len(numbered) >= 2:
+        return sanitize_filenames(numbered)
+    
+    # STRATEGY 4: Bullet list (- file.py\n* file2.py)
+    bullets = re.findall(r'^\s*[-*•]\s*(\S+\.(?:py|txt|md|json|yml|yaml|toml|cfg))', clean, re.MULTILINE | re.IGNORECASE)
+    if bullets and len(bullets) >= 2:
+        return sanitize_filenames(bullets)
+    
+    # STRATEGY 5: File pattern extraction (last resort)
+    files = re.findall(r'\b(\w+\.(?:py|txt|md|json|yml|yaml|toml|cfg))\b', clean, re.IGNORECASE)
+    if files:
+        # Deduplicate preserving order
+        seen = set()
+        unique = []
+        for f in files:
+            if f not in seen and f not in ["requests", "json", "pandas", "numpy"]:  # Filter libraries
+                seen.add(f)
+                unique.append(f)
+        
+        if unique:
+            return sanitize_filenames(unique)
     
     return None
 
@@ -167,6 +252,28 @@ def ensure_project_dir(project_name):
     path = os.path.join(BASE_DIR, project_name)
     if not os.path.exists(path): os.makedirs(path)
     return path
+
+def save_build_state(project_path, state):
+    """Save build progress for crash recovery"""
+    state_file = os.path.join(project_path, ".build_state.json")
+    state['timestamp'] = time.time()
+    
+    with open(state_file, "w") as f:
+        json.dump(state, f, indent=2)
+
+def load_build_state(project_path):
+    """Load previous build state if exists"""
+    state_file = os.path.join(project_path, ".build_state.json")
+    
+    if os.path.exists(state_file):
+        with open(state_file, "r") as f:
+            state = json.load(f)
+        
+        # Check if state is fresh (< 24h old)
+        if time.time() - state.get('timestamp', 0) < 86400:
+            return state
+    
+    return None
 
 # ==============================================================================
 # 2. SOFTWARE HOUSE ENGINE
@@ -256,35 +363,14 @@ def sh_phase_blueprint(p_name, initial_goal):
                 files = extract_json_from_reasoning(resp)
                 
                 if files and len(files) > 0:
-                    sanitized_files = []
-                    for item in files:
-                        if isinstance(item, str):
-                            if any(item.endswith(ext) for ext in ['.py', '.txt', '.md', '.json', '.yml']):
-                                sanitized_files.append(item)
-                        elif isinstance(item, dict):
-                            for val in item.values():
-                                if isinstance(val, str) and "." in val:
-                                    sanitized_files.append(val)
-                                    break
-                    
-                    sanitized_files = [
-                        f for f in sanitized_files 
-                        if f not in ["requests", "json", "pandas", "numpy", "beautifulsoup4"]
-                    ]
-                    
-                    if "main.py" not in sanitized_files:
-                        sanitized_files.insert(0, "main.py")
-                    if "requirements.txt" not in sanitized_files:
-                        sanitized_files.append("requirements.txt")
-                    
                     table = Table(title="✅ Blueprint Generato con Successo")
                     table.add_column("File", style="cyan")
                     table.add_column("Stato", style="green")
-                    for f in sanitized_files:
+                    for f in files:
                         table.add_row(f, "⏳ In attesa di generazione")
                     console.print(table)
                     
-                    return sanitized_files
+                    return files
                 
                 console.print(f"[warning]⚠️ Tentativo {attempt+1} fallito. Response non contiene JSON valido.[/warning]")
                 
@@ -303,10 +389,13 @@ def sh_phase_blueprint(p_name, initial_goal):
             
             return fallback_files
 
-def sh_phase_construction(project_path, files, goal):
-    console.print(Panel("[bold blue]FASE 2: RICERCA & SVILUPPO[/bold blue]", border_style="blue"))
-    history = []
-    
+def generate_file_with_retry(filename, goal, research_context, history, max_attempts=3):
+    """
+    Generate file with intelligent retry logic.
+    - Attempt 1: Standard prompt
+    - Attempt 2: More explicit prompt with failure explanation
+    - Attempt 3: Simplified version (MVP approach)
+    """
     docker_constraints = """
     VINCOLI DOCKER (LINUX HEADLESS):
     1. No GUI.
@@ -314,27 +403,12 @@ def sh_phase_construction(project_path, files, goal):
     3. No subprocess.Popen() senza gestione corretta.
     """
     
-    with Progress(SpinnerColumn(), TextColumn("[progress.description]{task.description}"), console=console) as progress:
-        main_task = progress.add_task("[cyan]Costruzione in corso...", total=len(files))
-        
-        for filename in files:
-            if filename == "requirements.txt": 
-                progress.advance(main_task)
-                continue
-            
-            clean_filename = os.path.basename(filename)
-            progress.update(main_task, description=f"[cyan]Lavorazione {clean_filename}...")
-            real_path = os.path.join(project_path, clean_filename)
-            
-            research_context = ""
-            if filename.endswith(".py"):
-                search_query = f"python code example for {goal} related to {clean_filename} modern libraries headless"
-                res = call_ai(f"USE [web_search] for: {search_query}", history, mode="factory", silent=True)
-                if len(res) > 100 and "Traceback" not in res:
-                    research_context = f"DATI RICERCA:\n{res[:2000]}\n"
-            
+    for attempt in range(max_attempts):
+        # Build prompt based on attempt number
+        if attempt == 0:
+            # Standard prompt
             prompt = f"""
-            TASK: Scrivi codice completo per '{clean_filename}'.
+            TASK: Scrivi codice completo per '{filename}'.
             CONTESTO PROGETTO: {goal}
             {docker_constraints}
             {research_context}
@@ -345,23 +419,186 @@ def sh_phase_construction(project_path, files, goal):
             3. Codice robusto con try/except e logging
             4. No hardcoded paths assoluti, usa os.path
             """
+        
+        elif attempt == 1:
+            # More explicit after failure
+            prompt = f"""
+            ⚠️ TENTATIVO {attempt + 1}/{max_attempts}
             
-            resp = call_ai(prompt, history, mode="factory", silent=True)
-            code = extract_code_block(resp)
+            Il tentativo precedente per '{filename}' ha fallito (codice vuoto o malformato).
             
-            if code and len(code) > 20:
-                with open(real_path, "w") as f: 
-                    f.write(code)
-                console.print(f"[success]✅ {clean_filename} creato ({len(code)} bytes)[/success]")
+            TASK: Scrivi codice VALIDO per '{filename}'.
+            CONTESTO: {goal}
+            
+            REGOLE CRITICHE:
+            1. USA <think> tags per ragionare
+            2. DOPO </think>, scrivi ```python
+            3. Poi il CODICE COMPLETO (minimo 30 righe)
+            4. Chiudi con ```
+            5. NON scrivere spiegazioni dopo il codice
+            
+            Esempio formato:
+            <think>Per {filename} serve...</think>
+            ```python
+            import os
+            
+            def main():
+                pass
+            
+            if __name__ == "__main__":
+                main()
+            ```
+            """
+        
+        else:  # attempt == 2
+            # Simplified MVP approach
+            prompt = f"""
+            ⚠️ ULTIMO TENTATIVO ({attempt + 1}/{max_attempts})
+            
+            Genera versione MINIMA FUNZIONANTE di '{filename}'.
+            Obiettivo: {goal}
+            
+            FORMATO OBBLIGATORIO:
+            <think>Logica minima necessaria</think>
+            ```python
+            # Codice minimo qui (anche solo 10 righe va bene)
+            ```
+            
+            Concentrati su FUNZIONALITÀ BASE, ignora ottimizzazioni.
+            """
+        
+        # Call AI
+        resp = call_ai(prompt, history, mode="factory", silent=True)
+        code = extract_code_block(resp)
+        
+        # Validation
+        if code and len(code) > 20:
+            # Additional validation for Python files
+            if filename.endswith('.py'):
+                try:
+                    compile(code, filename, 'exec')
+                    return code, attempt + 1  # Success
+                except SyntaxError as e:
+                    console.print(f"[warning]⚠️ Tentativo {attempt + 1}: Syntax error - {str(e)[:100]}[/warning]")
+                    continue
             else:
-                console.print(f"[error]❌ Fallita generazione {clean_filename}[/error]")
-                return False
+                return code, attempt + 1  # Success for non-Python files
+        
+        # Log failure
+        console.print(f"[warning]⚠️ Tentativo {attempt + 1}/{max_attempts} fallito per {filename}[/warning]")
+    
+    return None, max_attempts  # All attempts failed
+
+def sh_phase_construction(project_path, files, goal, existing_state=None):
+    console.print(Panel("[bold blue]FASE 2: RICERCA & SVILUPPO[/bold blue]", border_style="blue"))
+    history = []
+    
+    # Track completed files for state persistence
+    completed_files = set(existing_state.get('completed_files', [])) if existing_state else set()
+    failed_files = []
+    
+    with Progress(SpinnerColumn(), TextColumn("[progress.description]{task.description}"), console=console) as progress:
+        main_task = progress.add_task("[cyan]Costruzione in corso...", total=len(files))
+        
+        for filename in files:
+            if filename == "requirements.txt": 
+                progress.advance(main_task)
+                continue
+            
+            clean_filename = os.path.basename(filename)
+            
+            # Skip if already completed (resume functionality)
+            if clean_filename in completed_files:
+                console.print(f"[info]⏭️ {clean_filename} già completato (skip)[/info]")
+                progress.advance(main_task)
+                continue
+            
+            progress.update(main_task, description=f"[cyan]Lavorazione {clean_filename}...")
+            real_path = os.path.join(project_path, clean_filename)
+            
+            # Research context
+            research_context = ""
+            if filename.endswith(".py"):
+                search_query = f"python code example for {goal} related to {clean_filename} modern libraries headless"
+                res = call_ai(f"USE [web_search] for: {search_query}", history, mode="factory", silent=True)
+                if len(res) > 100 and "Traceback" not in res:
+                    research_context = f"DATI RICERCA:\n{res[:2000]}\n"
+            
+            # Generate with retry
+            code, attempts = generate_file_with_retry(clean_filename, goal, research_context, history)
+            
+            if code:
+                with open(real_path, "w") as f:
+                    f.write(code)
+                console.print(f"[success]✅ {clean_filename} creato ({len(code)} bytes, {attempts} tentativi)[/success]")
+                completed_files.add(clean_filename)
                 
-            history.append({"role": "user", "content": f"Codice per {clean_filename} completato."})
-            history.append({"role": "assistant", "content": "Confermato."})
+                # Save state checkpoint after each successful file
+                save_build_state(project_path, {
+                    'phase': 'construction_in_progress',
+                    'blueprint': files,
+                    'completed_files': list(completed_files),
+                    'goal': goal
+                })
+                
+                history.append({"role": "user", "content": f"Codice per {clean_filename} completato."})
+                history.append({"role": "assistant", "content": "Confermato."})
+            else:
+                console.print(f"[error]❌ Impossibile generare {clean_filename} dopo {attempts} tentativi[/error]")
+                failed_files.append(clean_filename)
+                # Don't abort - continue with other files
+            
             progress.advance(main_task)
     
-    return True
+    # Report summary
+    if failed_files:
+        console.print(f"[warning]⚠️ Build completato con {len(failed_files)} file falliti: {', '.join(failed_files)}[/warning]")
+    
+    return len(failed_files) == 0  # Return True only if all files succeeded
+
+def validate_requirements(requirements_text):
+    """
+    Validate requirements.txt for known conflicts.
+    Returns (is_valid, warnings, fixed_requirements)
+    """
+    KNOWN_CONFLICTS = {
+        ('pandas', '>=2.0'): [('numpy', '<1.20', '>=1.20.0,<2.0.0')],
+        ('tensorflow', '>=2.0'): [('numpy', '<1.19', '>=1.19.0,<2.0.0')],
+    }
+    
+    warnings = []
+    lines = [l.strip() for l in requirements_text.split('\n') if l.strip() and not l.startswith('#')]
+    
+    # Parse packages
+    packages = {}
+    for line in lines:
+        match = re.match(r'([a-zA-Z0-9_-]+)([<>=!]+.*)?', line)
+        if match:
+            pkg_name = match.group(1).lower()
+            version_spec = match.group(2) or ''
+            packages[pkg_name] = {'spec': version_spec, 'line': line}
+    
+    # Check conflicts
+    for (pkg1, ver1_spec), conflicts in KNOWN_CONFLICTS.items():
+        if pkg1 in packages:
+            pkg1_ver = packages[pkg1]['spec']
+            if ver1_spec in pkg1_ver:
+                for conflict_pkg, conflict_ver, suggested_fix in conflicts:
+                    if conflict_pkg in packages:
+                        pkg2_ver = packages[conflict_pkg]['spec']
+                        if conflict_ver in pkg2_ver:
+                            warnings.append(
+                                f"⚠️ CONFLICT: {pkg1}{pkg1_ver} incompatible with {conflict_pkg}{pkg2_ver}\n"
+                                f"   Suggested: {conflict_pkg}{suggested_fix}"
+                            )
+                            # Auto-fix - suggested_fix is just the version spec
+                            packages[conflict_pkg]['line'] = f"{conflict_pkg}{suggested_fix}"
+                            packages[conflict_pkg]['spec'] = suggested_fix
+    
+    # Rebuild requirements
+    fixed_lines = [pkg['line'] for pkg in packages.values()]
+    
+    return (len(warnings) == 0, warnings, '\n'.join(fixed_lines))
 
 def sh_phase_integrator(project_path):
     console.print(Panel("[bold yellow]FASE 3: SYSTEM INTEGRATION[/bold yellow]", border_style="yellow"))
@@ -388,6 +625,20 @@ def sh_phase_integrator(project_path):
         
         req = extract_code_block(resp) or resp.replace("```", "").strip()
         req = re.sub(r'<think>.*?</think>', '', req, flags=re.DOTALL).strip()
+        
+        # Validate dependencies
+        is_valid, warnings, fixed_req = validate_requirements(req)
+        
+        if not is_valid:
+            console.print(Panel(
+                '\n'.join(warnings),
+                title="[yellow]⚠️ Dependency Conflicts Detected[/yellow]",
+                border_style="yellow"
+            ))
+            
+            if Confirm.ask("Applicare fix automatici?"):
+                req = fixed_req
+                console.print("[success]✅ Conflicts risolti automaticamente[/success]")
         
         with open(os.path.join(project_path, "requirements.txt"), "w") as f: 
             f.write(req)
@@ -510,9 +761,56 @@ def mode_factory():
     goal = Prompt.ask("Obiettivo")
     path = ensure_project_dir(p_name)
     
-    files = sh_phase_blueprint(p_name, goal)
+    # Check for existing build
+    existing_state = load_build_state(path)
+    files = None
+    
+    if existing_state:
+        console.print(Panel(
+            f"[yellow]🔄 Trovato build precedente interrotto:\n"
+            f"Fase: {existing_state.get('phase', 'unknown')}\n"
+            f"File completati: {len(existing_state.get('completed_files', []))}/{len(existing_state.get('blueprint', []))}\n"
+            f"Timestamp: {time.ctime(existing_state.get('timestamp', 0))}[/yellow]",
+            title="Resume Build?",
+            border_style="yellow"
+        ))
+        
+        if Confirm.ask("Vuoi riprendere da dove ti eri fermato?"):
+            files = existing_state.get('blueprint', [])
+            completed = set(existing_state.get('completed_files', []))
+            goal = existing_state.get('goal', goal)
+            
+            console.print(f"[info]🔄 Resuming build... {len(completed)}/{len(files)} file già completati[/info]")
+        else:
+            state_file = os.path.join(path, ".build_state.json")
+            if os.path.exists(state_file):
+                os.remove(state_file)
+            console.print("[info]Build precedente cancellato. Ricomincio da zero.[/info]")
+            existing_state = None
+    
+    # Generate blueprint if not resuming
+    if files is None:
+        files = sh_phase_blueprint(p_name, goal)
+        
+        # Save initial state
+        if files:
+            save_build_state(path, {
+                'phase': 'blueprint_complete',
+                'blueprint': files,
+                'completed_files': [],
+                'goal': goal
+            })
+    
     if files:
-        if sh_phase_construction(path, files, goal):
+        if sh_phase_construction(path, files, goal, existing_state):
+            # Save state after construction
+            save_build_state(path, {
+                'phase': 'construction_complete',
+                'blueprint': files,
+                'completed_files': files,
+                'goal': goal
+            })
+            
             sh_phase_integrator(path)
             sh_phase_critic(path)
             sh_phase_runtime(path, p_name, goal)

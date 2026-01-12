@@ -8,3 +8,5 @@ data/
 .env
 *.backup
 projects/test_repair/
+# Build state files (used for crash recovery, not needed in git)
+**/.build_state.json
