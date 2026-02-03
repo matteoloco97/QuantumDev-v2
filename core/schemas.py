@@ -2,7 +2,7 @@
 core/schemas.py - Pydantic models for structured validation
 Provides type-safe data models with automatic validation
 """
-from pydantic import BaseModel, Field, validator
+from pydantic import BaseModel, Field, field_validator, model_validator, ConfigDict
 from typing import List, Optional
 
 class Blueprint(BaseModel):
@@ -14,10 +14,11 @@ class Blueprint(BaseModel):
     - Presence of main.py and requirements.txt
     - No library names mistaken as filenames
     """
-    files: List[str] = Field(..., min_items=1, description="List of files to generate")
+    files: List[str] = Field(..., min_length=1, description="List of files to generate")
     architecture_notes: str = Field(default="", description="Architecture explanation")
     
-    @validator('files')
+    @field_validator('files')
+    @classmethod
     def validate_filenames(cls, v):
         """Ensure valid file extensions"""
         valid_extensions = ('.py', '.txt', '.md', '.json', '.yml', '.yaml', '.toml', '.cfg')
@@ -28,7 +29,8 @@ class Blueprint(BaseModel):
         
         return v
     
-    @validator('files')
+    @field_validator('files')
+    @classmethod
     def ensure_essentials(cls, v):
         """Ensure main.py and requirements.txt are present"""
         if 'main.py' not in v:
@@ -43,22 +45,20 @@ class CodeFile(BaseModel):
     """
     Generated code file with metadata.
     """
+    model_config = ConfigDict(arbitrary_types_allowed=True)
+    
     filename: str
     content: str = Field(..., min_length=10, description="File content (minimum 10 chars)")
     language: str = "python"
-    size_bytes: int = 0
+    size_bytes: int = Field(default=0)
     attempts: int = 1  # Number of generation attempts needed
     
-    @validator('size_bytes', always=True)
-    def calculate_size(cls, v, values):
+    @model_validator(mode='after')
+    def calculate_size(self) -> 'CodeFile':
         """Auto-calculate file size from content"""
-        if 'content' in values:
-            return len(values['content'])
-        return 0
-    
-    class Config:
-        # Allow arbitrary types for future extensibility
-        arbitrary_types_allowed = True
+        if self.size_bytes == 0:
+            self.size_bytes = len(self.content)
+        return self
 
 class ProjectState(BaseModel):
     """
@@ -71,7 +71,8 @@ class ProjectState(BaseModel):
     goal: str = Field(..., description="Project objective")
     timestamp: float = Field(..., description="Unix timestamp of last update")
     
-    @validator('phase')
+    @field_validator('phase')
+    @classmethod
     def validate_phase(cls, v):
         """Ensure phase is valid"""
         valid_phases = [
