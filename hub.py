@@ -258,7 +258,7 @@ def save_build_state(project_path, state_dict):
     state = ProjectState(**state_dict)
     
     with open(state_file, "w") as f:
-        f.write(state.json(indent=2))
+        f.write(state.model_dump_json(indent=2))
 
 def load_build_state(project_path):
     """Load previous build state with Pydantic validation"""
@@ -267,14 +267,14 @@ def load_build_state(project_path):
     if os.path.exists(state_file):
         try:
             with open(state_file, "r") as f:
-                state = ProjectState.parse_raw(f.read())
+                state = ProjectState.model_validate_json(f.read())
             
             # Check if expired
             if state.is_expired(max_age_hours=24):
                 console.print("[warning]⚠️ Build state expired (>24h old), ignoring[/warning]")
                 return None
             
-            return state.dict()
+            return state.model_dump()
         except Exception as e:
             console.print(f"[error]❌ Failed to load build state: {e}[/error]")
             return None
