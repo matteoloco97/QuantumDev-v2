@@ -6,7 +6,6 @@ import sys
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 from hub import extract_code_block as hub_extract_code_block
-from architect import extract_code_block as architect_extract_code_block
 from core.tools import write_file, terminal_run
 
 
@@ -29,18 +28,6 @@ class TestEscapeSequencesFix:
         assert len(lines) >= 2
         assert 'import os' in lines[0]
     
-    def test_architect_escape_sequences_fix(self):
-        """Test architect.py extract_code_block with literal escapes"""
-        # Simula risposta AI con literal escapes
-        corrupted = '```python\nimport sys\\ndef main():\\n    print("test")\\n```'
-        code = architect_extract_code_block(corrupted)
-        
-        assert code is not None
-        assert '\n' in code  # Real newlines
-        assert '\\n' not in code  # No literal escapes
-        assert 'import sys' in code
-        assert 'def main():' in code
-    
     def test_hub_normal_code_unchanged(self):
         """Test that normal code without escape sequences is unchanged"""
         normal = '```python\nimport os\nprint("Hello")\n```'
@@ -49,15 +36,6 @@ class TestEscapeSequencesFix:
         assert code is not None
         assert 'import os' in code
         assert 'print("Hello")' in code
-    
-    def test_architect_normal_code_unchanged(self):
-        """Test that normal code without escape sequences is unchanged"""
-        normal = '```python\nimport sys\ndef main():\n    print("test")\n```'
-        code = architect_extract_code_block(normal)
-        
-        assert code is not None
-        assert 'import sys' in code
-        assert 'def main():' in code
 
 
 class TestSecurityFixes:

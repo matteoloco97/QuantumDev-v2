@@ -343,7 +343,7 @@ class TestStatePersistence:
     
     def test_state_file_location(self):
         """Test that state file is created in correct location"""
-        state = {'phase': 'test', 'blueprint': [], 'completed_files': [], 'goal': 'test'}
+        state = {'phase': 'blueprint_complete', 'blueprint': [], 'completed_files': [], 'goal': 'test'}
         save_build_state(self.temp_dir, state)
         
         state_file = os.path.join(self.temp_dir, ".build_state.json")

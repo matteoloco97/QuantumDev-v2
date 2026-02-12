@@ -6,6 +6,11 @@ import re
 import time
 import glob
 import codecs
+import logging
+
+# Import new core modules
+from core.llm_client import LLMClient
+from core.schemas import Blueprint, CodeFile, ProjectState
 
 # --- CHECK DIPENDENZE GRAFICHE ---
 try:
@@ -39,6 +44,22 @@ BASE_DIR = "projects"
 MEMORY_DIR = "memories"
 MAX_HISTORY_LENGTH = 30
 
+# --- LOGGING SETUP ---
+# Create logs directory if it doesn't exist
+os.makedirs('logs', exist_ok=True)
+
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s [%(levelname)s] %(name)s: %(message)s',
+    handlers=[
+        logging.StreamHandler(),
+        logging.FileHandler('logs/quantumdev.log')
+    ]
+)
+
+# Initialize LLM client globally
+llm_client = LLMClient()
+
 # ==============================================================================
 # 1. CORE UTILITIES
 # ==============================================================================
@@ -53,25 +74,24 @@ def print_header(title, subtitle=""):
     ))
 
 def call_ai(message, history=[], system_context="", mode="general", silent=False):
-    full_prompt = f"{system_context}\n\nUTENTE: {message}" if system_context else message
-    payload = {
-        "message": full_prompt, 
-        "history": history,
-        "mode": mode 
-    }
-    
+    """Wrapper for backward compatibility - delegates to LLMClient"""
     if not silent:
         with console.status("[ai]Elaborazione neurale in corso...", spinner="dots"):
-            try:
-                resp = requests.post(API_URL, json=payload, timeout=300)
-                text = resp.json().get("response", "")
-                return text
-            except Exception as e: return f"ERRORE API: {e}"
+            return llm_client.generate(
+                message=message,
+                history=history,
+                system_context=system_context,
+                mode=mode,
+                silent=silent
+            )
     else:
-        try:
-            resp = requests.post(API_URL, json=payload, timeout=300)
-            return resp.json().get("response", "")
-        except Exception as e: return f"ERRORE API: {e}"
+        return llm_client.generate(
+            message=message,
+            history=history,
+            system_context=system_context,
+            mode=mode,
+            silent=silent
+        )
 
 def load_session(name):
     path = os.path.join(MEMORY_DIR, f"{name}.json")
@@ -87,35 +107,8 @@ def save_session(name, history):
     with open(path, 'w') as f: json.dump(history, f, indent=2)
 
 def extract_code_block(text):
-    """
-    Estrae codice da blocchi markdown, gestendo <think> tags di DeepSeek-R1.
-    🔧 FIX: Gestisce escape sequences letterali (\n → newline reale)
-    """
-    # 1. Rimuovi <think> tags
-    clean = re.sub(r'<think>.*?</think>', '', text, flags=re.DOTALL)
-    
-    # 2. Estrai blocchi di codice
-    matches = re.findall(r'```(?:\w+)?\s*(.*?)```', clean, re.DOTALL)
-    if not matches:
-        return None
-    
-    # 3. Prendi il blocco più lungo
-    code = max(matches, key=len).strip()
-    
-    # 4. 🔧 FIX: Unescape se contiene literal escape sequences
-    if '\\n' in code:
-        real_newlines = code.count('\n')
-        escaped_newlines = code.count('\\n')
-        
-        # Se >50% delle newline sono escaped, facciamo unescape
-        if escaped_newlines > real_newlines * 0.5:
-            try:
-                code = codecs.decode(code, 'unicode_escape')
-            except Exception:
-                # Fallback manuale
-                code = code.replace('\\n', '\n').replace('\\t', '\t').replace('\\r', '\r')
-    
-    return code
+    """Wrapper for backward compatibility - delegates to LLMClient"""
+    return LLMClient.extract_code_block(text)
 
 def sanitize_filenames(files):
     """
@@ -253,25 +246,38 @@ def ensure_project_dir(project_name):
     if not os.path.exists(path): os.makedirs(path)
     return path
 
-def save_build_state(project_path, state):
-    """Save build progress for crash recovery"""
+def save_build_state(project_path, state_dict):
+    """Save build progress using Pydantic validation"""
     state_file = os.path.join(project_path, ".build_state.json")
-    state['timestamp'] = time.time()
+    
+    # Add timestamp if not present
+    if 'timestamp' not in state_dict:
+        state_dict['timestamp'] = time.time()
+    
+    # Validate with Pydantic
+    state = ProjectState(**state_dict)
     
     with open(state_file, "w") as f:
-        json.dump(state, f, indent=2)
+        f.write(state.model_dump_json(indent=2))
 
 def load_build_state(project_path):
-    """Load previous build state if exists"""
+    """Load previous build state with Pydantic validation"""
     state_file = os.path.join(project_path, ".build_state.json")
     
     if os.path.exists(state_file):
-        with open(state_file, "r") as f:
-            state = json.load(f)
-        
-        # Check if state is fresh (< 24h old)
-        if time.time() - state.get('timestamp', 0) < 86400:
-            return state
+        try:
+            with open(state_file, "r") as f:
+                state = ProjectState.model_validate_json(f.read())
+            
+            # Check if expired
+            if state.is_expired(max_age_hours=24):
+                console.print("[warning]⚠️ Build state expired (>24h old), ignoring[/warning]")
+                return None
+            
+            return state.model_dump()
+        except Exception as e:
+            console.print(f"[error]❌ Failed to load build state: {e}[/error]")
+            return None
     
     return None
 
