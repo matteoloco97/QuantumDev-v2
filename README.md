@@ -187,6 +187,32 @@ BASE_DIR=projects
 MEMORY_DIR=memories
 ```
 
+### General Tools (Chat / General Intelligence mode)
+
+These variables control tool usage when `mode=general` (chat mode, selection 1):
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `GENERAL_TOOLS_ENABLED` | `1` | Enable tool usage in general mode. Set to `0` to disable all tools. |
+| `GENERAL_MAX_TOOL_CALLS` | `3` | Maximum tool calls per request in general mode (loop depth). |
+| `GENERAL_ALLOW_TERMINAL_RUN` | `0` | Allow `terminal_run` in general mode. **Disabled by default** for safety. Set to `1` to enable. |
+| `GENERAL_ALLOW_WRITE_PROJECTS` | `0` | Allow `write_file` to write inside `projects/` in general mode. By default only `memories/` is permitted. Set to `1` to allow both. |
+
+Example `.env` configuration:
+```bash
+GENERAL_TOOLS_ENABLED=1
+GENERAL_MAX_TOOL_CALLS=3
+GENERAL_ALLOW_TERMINAL_RUN=0
+GENERAL_ALLOW_WRITE_PROJECTS=0
+```
+
+#### Docker notes
+After editing `.env` or modifying `core/engine.py`, apply changes with:
+```bash
+docker-compose restart quantum-app
+```
+A full rebuild (`docker-compose up --build`) is only required when `requirements.txt` changes.
+
 ### Build State Configuration
 - State file: `.build_state.json` (auto-generated in project directory)
 - Expiration: 24 hours
